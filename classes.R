@@ -1,4 +1,6 @@
 library(R6)
+library(ggplot2)
+library(reshape2)
 
 Sugarscape <- R6Class(
   "sugarscape world",
@@ -22,7 +24,7 @@ Sugarscape <- R6Class(
     },
     
     gen_capacity = function(peaks = NULL, maxc = 4, breaks = c(21,16,11,6)) {
-      
+      # generate sugarscape
       if (is.null(peaks)) {
         
         randomCap <- sample(0:4, prod(self$dimensions))
@@ -58,6 +60,7 @@ Sugarscape <- R6Class(
     },
     
     gen_agents = function(n, params = NULL) {
+      # spawn agents
       if (is.null(params)) {
         # some default values
         params <- list(
@@ -105,6 +108,7 @@ Sugarscape <- R6Class(
     },
     
     grow = function() {
+      # increment sugar
       sugar_val <- self$sugar_val + self$sugar_grow
       sugar_cap <- self$sugar_cap
       sugar_val[sugar_val > sugar_cap] <- sugar_cap[sugar_val > sugar_cap]
@@ -112,7 +116,12 @@ Sugarscape <- R6Class(
     },
     
     move = function() {
-     
+      # move all agents according to their rules 
+      
+      if (length(self$agents) == 0) {
+        return(FALSE) # mass extinction
+      }
+      
       turn_order <- sample(1:length(self$agents))
       
       for (agent in turn_order) {
@@ -133,9 +142,11 @@ Sugarscape <- R6Class(
       
       self$grow()
       self$cleanse()
+      return(TRUE)
     },
     
     harvest = function(loc) {
+      # remove sugar from sugarscape (and return it as value for agent)
       yield <- self$sugar_val[loc[1],loc[2]]
       if (length(yield) == 0) {
         browser()
@@ -147,6 +158,37 @@ Sugarscape <- R6Class(
     cleanse = function() {
       # remove dead agents from list
       self$agents <-  self$agents[!sapply(self$agents, function(a){a$dead})]
+    },
+    
+    show = function() {
+      # display the sugarscape
+      blank_theme <- theme(
+        plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        legend.position="none"
+      )
+      
+      cols <- c("0" = "white", "1" = "mistyrose", "2" = "mistyrose1",
+                "3" = "mistyrose2", "4" = "mistyrose3", 
+                "5" = "mistyrose4", # what if more than 5 levels of sugar???
+                "20" = "red") # agent
+                
+      grid <- self$sugar_val
+      grid[self$occupied == 1] <- 20
+      
+      g <- ggplot(melt(grid), aes(Var1, Var2)) + 
+        geom_tile(aes(fill = as.factor(value)), color = "gray") + blank_theme +
+        scale_fill_manual(values = cols)
+      g
     }
     
   )
@@ -231,6 +273,28 @@ Agent <- R6Class(
 )
 
 
+# functions  --------------------------------------------------------------
+runsim = function(scape, periods, plt = T) {
+  if (plt) {
+    print(scape$show())
+    Sys.sleep(1.5)
+  }
+  period <- 0
+  alive <- T
+  while(period <= periods & alive) {
+    alive <- scape$move()
+    print("-")
+    if (plt) {
+      print(scape$show())
+      Sys.sleep(1.5)
+    }
+    period <- period + 1
+  }
+}
+
+
 #   -----------------------------------------------------------------------
-testClass <- Sugarscape$new(c(50,50))
-testClass$move()
+testScape <- Sugarscape$new(c(50,50))
+#testScape$move()
+#testScape$show()
+runsim(testScape, 30)
