@@ -7,16 +7,18 @@ Sugarscape <- R6Class(
     sugar_cap  = NULL, # capacity of each field - rows x columns
     sugar_val  = NULL, # current value of each field - rows x columns
     occupied   = NULL, # agent positions - rows x columns
-    agents     = NULL,
+    agents     = NULL, # agent list
     sugar_grow = NULL, # growth rate for sugar
     
     initialize = function(lout, peaks = list(c(15,15),c(35,35)),
-                          maxc = 4, suggr = 1, agent_params = NULL) {
+                          maxc = 4, suggr = 1, nagents = 150, 
+                          agent_params = NULL) {
       self$dimensions <- lout
       self$sugar_cap  <- self$gen_capacity(peaks, maxc)
       self$sugar_val  <- self$sugar_cap # initialize full
       self$sugar_grow <- suggr
-      self$gen_agents(agent_params)
+      self$occupied   <- matrix(0, nrow = lout[1], ncol = lout[2])
+      self$gen_agents(nagents, agent_params)
     },
     
     gen_capacity = function(peaks = NULL, maxc = 4, breaks = c(21,16,11,6)) {
@@ -38,7 +40,7 @@ Sugarscape <- R6Class(
             sqrt((allCels$Var1 - pk[1])^2 + (allCels$Var2 - pk[2])^2)
           }
         )
-        dist <- apply(allDist, 2, min)
+        dist <- apply(allDist, 1, min)
         
         caps <- sapply(
           seq_along(breaks), 
@@ -78,21 +80,24 @@ Sugarscape <- R6Class(
       
       # Population distribution of parameters
       visions      <- sample(params$values$vision, 
-                             n, prob = params$probs$vision)
-      sugarblosims <- sample(params$values$sugarbolism, 
-                             n, prob = params$probs$sugarbolism)
+                             n, prob = params$probs$vision, replace = T)
+      sugarbolisms <- sample(params$values$sugarbolism, 
+                             n, prob = params$probs$sugarbolism, replace = T)
       lifespans    <- sample(params$values$lifespan, 
-                             n, prob = params$probs$lifespan)
+                             n, prob = params$probs$lifespan, replace = T)
       capacities   <- sample(params$values$capacity, 
-                             n, prob = params$probs$capacity)
+                             n, prob = params$probs$capacity, replace = T)
       endowments   <- sample(params$values$endowment, 
-                             n, prob = params$probs$endowment)
+                             n, prob = params$probs$endowment, replace = T)
       
       # Possible locatiosn
       locs <- which(self$occupied == 0, arr.ind = T)
+      locs <- locs[sample(1:nrow(locs), size = n), ]
       
-      self$agents <- lapply(seq_along(n), function(i) {
-        Agent$new(c(locs[i,1],locs[i,2]), visions[i], sugarbolisms[i],
+      self$agents <- lapply(seq(n), function(i) {
+        thisloc <- as.numeric(locs[i, ])
+        self$occupied[thisloc[1],thisloc[2]] <- 1
+        Agent$new(thisloc, visions[i], sugarbolisms[i],
                   lifespans[i], endowments[i], capacities[i])
       })
       
@@ -100,28 +105,30 @@ Sugarscape <- R6Class(
     },
     
     grow = function() {
-      sugar_val <- self$sugar_val
+      sugar_val <- self$sugar_val + self$sugar_grow
       sugar_cap <- self$sugar_cap
       sugar_val[sugar_val > sugar_cap] <- sugar_cap[sugar_val > sugar_cap]
       self$sugar_val <- sugar_val
     },
     
     move = function() {
+     
       turn_order <- sample(1:length(self$agents))
       
       for (agent in turn_order) {
-        oldpos <- self$agents[[agent]]$pos
+        oldpos <- self$agents[[agent]]$loc
         self$occupied[oldpos[1], oldpos[2]] <- 0
-        newpos <- self$agents[agent]$move()
+        
+        newpos <- self$agents[[agent]]$move(self$sugar_val, self$occupied)
+        
         self$occupied[newpos[1], newpos[2]] <- 1
         self$agents[[agent]]$add_sugar(self$harvest(newpos))
         
         if (self$agents[[agent]]$is_old() | 
-            self$agents[[agent]]$is_starving()) {
-          self$occupied[newpos[1], newpos[2]] <- 0 # died
+            self$agents[[agent]]$is_starved()) {
+          self$occupied[newpos[1], newpos[2]] <- 0 # remove corpse
           # to do - replace ?
         }
-        
       }
       
       self$grow()
@@ -130,18 +137,16 @@ Sugarscape <- R6Class(
     
     harvest = function(loc) {
       yield <- self$sugar_val[loc[1],loc[2]]
+      if (length(yield) == 0) {
+        browser()
+      }
       self$sugar_val[loc[1],loc[2]] <- 0
       return(yield)
     },
     
     cleanse = function() {
-      self$agents <- lapply(self$agents, function(agent) {
-        if (agent$dead) {
-          return(NULL)
-        } else {
-          return(agent)
-        }
-      })
+      # remove dead agents from list
+      self$agents <-  self$agents[!sapply(self$agents, function(a){a$dead})]
     }
     
   )
@@ -162,28 +167,35 @@ Agent <- R6Class(
     initialize = function(loc, vision = 4, sugarbolism = 1,
                           lifespan = 60, sugar = 5, capacity = Inf) {
       self$dead        <- FALSE # it's alive
+      self$loc         <- loc
       self$vision      <- vision
       self$sugarbolism <- sugarbolism
       self$lifespan    <- lifespan
       self$sugar       <- sugar
-      self$capacity    <- capcaity
+      self$capacity    <- capacity
       self$age         <- 0
     },
     
-    move = function(sugarfield) {
+    move = function(sugarfield, otheragents) {
       loc <- self$loc
       vis <- self$vision
-      
+
       # visible sugar
-      vissugar <- sugarfield[loc[1]-vis:loc[1]+vis, loc[2]-vis:loc[2]+vis]
+      rbound1 <- max(1, loc[1] - vis) # horizontal boundary of vision
+      rbound2 <- min(nrow(sugarfield), loc[1] + vis) # notice no wrap-around
+      cbound1 <- max(1, loc[2] - vis)
+      cbound2 <- min(ncol(sugarfield), loc[2] + vis) # and square vision
+      
+      vissugar <- sugarfield[rbound1:rbound2, cbound1:cbound2]
+      visagnts <- otheragents[rbound1:rbound2, cbound1:cbound2]
       
       # choose max
-      maxsugar <- which(vissugar == max(vissugar), arr.index=T)
-      maxsugar <- maxsugar[sample(1:nrow(maxsugar),1), ]
+      maxsugar <- which(vissugar == max(vissugar) & visagnts == 0, arr.ind = T)
+      maxsugar <- as.numeric(maxsugar[sample(1:nrow(maxsugar),1), ])
       
       # change loc
-      loc[1] <- loc[1] + (loc[1] - vis + maxsugar[1,])
-      loc[2] <- loc[2] + (loc[2] - vis + maxsugar[2,])
+      loc[1] <- rbound1 + maxsugar[1] - 1 # double counting the start
+      loc[2] <- cbound1 + maxsugar[2] - 1
       
       self$loc <- loc
       return(loc)
@@ -194,6 +206,8 @@ Agent <- R6Class(
       if (self$sugar == 0) {
         self$dead <- TRUE
         return(TRUE)
+      } else {
+        return(FALSE)
       }
     },
     
@@ -202,6 +216,8 @@ Agent <- R6Class(
       if (self$age > self$lifespan) {
         self$dead <- TRUE
         return(TRUE)
+      } else {
+        return(FALSE)
       }
     },
     
@@ -213,3 +229,8 @@ Agent <- R6Class(
     }
   )
 )
+
+
+#   -----------------------------------------------------------------------
+testClass <- Sugarscape$new(c(50,50))
+testClass$move()
