@@ -1,5 +1,6 @@
 library(R6)
 library(ggplot2)
+library(gganimate)
 library(reshape2)
 
 Sugarscape <- R6Class(
@@ -11,6 +12,20 @@ Sugarscape <- R6Class(
     occupied   = NULL, # agent positions - rows x columns
     agents     = NULL, # agent list
     sugar_grow = NULL, # growth rate for sugar
+    theme      = theme(
+      plot.background = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.background = element_blank(),
+      panel.border = element_blank(),
+      axis.line = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text.x = element_blank(),
+      axis.text.y = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      legend.position = "none"
+    ), # blank theme for ggplot
     
     initialize = function(lout, peaks = list(c(15,15),c(35,35)),
                           maxc = 4, suggr = 1, nagents = 150, 
@@ -24,7 +39,7 @@ Sugarscape <- R6Class(
     },
     
     gen_capacity = function(peaks = NULL, maxc = 4, breaks = c(21,16,11,6)) {
-      # generate sugarscape
+      "generate sugarscape"
       if (is.null(peaks)) {
         
         randomCap <- sample(0:4, prod(self$dimensions))
@@ -60,7 +75,7 @@ Sugarscape <- R6Class(
     },
     
     gen_agents = function(n, params = NULL) {
-      # spawn agents
+      "spawn agents"
       if (is.null(params)) {
         # some default values
         params <- list(
@@ -108,7 +123,7 @@ Sugarscape <- R6Class(
     },
     
     grow = function() {
-      # increment sugar
+      "increment sugar"
       sugar_val <- self$sugar_val + self$sugar_grow
       sugar_cap <- self$sugar_cap
       sugar_val[sugar_val > sugar_cap] <- sugar_cap[sugar_val > sugar_cap]
@@ -116,7 +131,7 @@ Sugarscape <- R6Class(
     },
     
     move = function() {
-      # move all agents according to their rules 
+      "move all agents according to their rules"
       
       if (length(self$agents) == 0) {
         return(FALSE) # mass extinction
@@ -145,8 +160,44 @@ Sugarscape <- R6Class(
       return(TRUE)
     },
     
+    simulate = function(periods, plt = T, animate = F) {
+      "Simulate for a number of periods"
+      
+      if (animate) {
+        grids <- list()
+      }
+      
+      if (plt) {
+        print(scape$show())
+        Sys.sleep(0.5)
+      }
+      
+      period <- 0
+      alive <- T
+      
+      while (period <= periods & alive) {
+        alive <- self$move()
+        cat("-")
+        
+        if (plt) {
+          print(self$show())
+          Sys.sleep(0.5)
+        }
+        
+        if (animate) {
+          grids[[length(grids) + 1]] <- self$show(returnGrid = T)
+        }
+        
+        period <- period + 1
+      }
+      
+      if (animate) {
+        self$animategrid(grids)
+      }
+    },
+    
     harvest = function(loc) {
-      # remove sugar from sugarscape (and return it as value for agent)
+      "remove sugar from sugarscape (and return it as value for agent)"
       yield <- self$sugar_val[loc[1],loc[2]]
       if (length(yield) == 0) {
         browser()
@@ -156,27 +207,12 @@ Sugarscape <- R6Class(
     },
     
     cleanse = function() {
-      # remove dead agents from list
+      "remove dead agents from list"
       self$agents <-  self$agents[!sapply(self$agents, function(a){a$dead})]
     },
     
-    show = function() {
-      # display the sugarscape
-      blank_theme <- theme(
-        plot.background = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_blank(),
-        panel.background = element_blank(),
-        panel.border = element_blank(),
-        axis.line = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        axis.title.x = element_blank(),
-        axis.title.y = element_blank(),
-        legend.position="none"
-      )
-      
+    show = function(returnGrid = F) {
+      "display the sugarscape"
       cols <- c("0" = "white", "1" = "mistyrose", "2" = "mistyrose1",
                 "3" = "mistyrose2", "4" = "mistyrose3", 
                 "5" = "mistyrose4", # what if more than 5 levels of sugar???
@@ -185,10 +221,32 @@ Sugarscape <- R6Class(
       grid <- self$sugar_val
       grid[self$occupied == 1] <- 20
       
+      if (returnGrid) return(grid)
+      
       g <- ggplot(melt(grid), aes(Var1, Var2)) + 
-        geom_tile(aes(fill = as.factor(value)), color = "gray") + blank_theme +
+        geom_tile(aes(fill = as.factor(value)), color = "gray") + self$theme +
         scale_fill_manual(values = cols)
       g
+    },
+    
+    animategrid = function(grids) {
+      "Animates the sugarscape"
+      
+      grids  <- lapply(grids, melt) # flatten arrays
+      frames <- rep(1:length(grids), each = sapply(grids, nrow))
+      
+      Grids  <- Reduce(rbind, grids) # combine all
+      Grids$frame <- frames # add frame identifier
+      
+      cols <- c("0" = "white", "1" = "mistyrose", "2" = "mistyrose1",
+                "3" = "mistyrose2", "4" = "mistyrose3", 
+                "5" = "mistyrose4", # what if more than 5 levels of sugar???
+                "20" = "red") # agent
+      
+      g <- ggplot(Grids, aes(Var1, Var2, frame = frame)) + 
+        geom_tile(aes(fill = as.factor(value)), color = "gray") + self$theme +
+        scale_fill_manual(values = cols)
+      return(g)
     }
     
   )
@@ -219,6 +277,7 @@ Agent <- R6Class(
     },
     
     move = function(sugarfield, otheragents) {
+      "choose moving location"
       loc <- self$loc
       vis <- self$vision
 
@@ -244,6 +303,7 @@ Agent <- R6Class(
     },
     
     is_starved = function() {
+      "check if agent dies of hunger"
       self$sugar <- self$sugar - self$sugarbolism
       if (self$sugar == 0) {
         self$dead <- TRUE
@@ -254,6 +314,7 @@ Agent <- R6Class(
     },
     
     is_old = function() {
+      "check if agent dies of age"
       self$age <- self$age + 1
       if (self$age > self$lifespan) {
         self$dead <- TRUE
@@ -264,6 +325,7 @@ Agent <- R6Class(
     },
     
     add_sugar = function(sug) {
+      "add sugar to holdings"
       self$sugar <- self$sugar + sug
       if (self$sugar > self$capacity) {
         self$sugar = self$capacity
@@ -273,28 +335,28 @@ Agent <- R6Class(
 )
 
 
-# functions  --------------------------------------------------------------
-runsim = function(scape, periods, plt = T) {
-  if (plt) {
-    print(scape$show())
-    Sys.sleep(1.5)
-  }
-  period <- 0
-  alive <- T
-  while(period <= periods & alive) {
-    alive <- scape$move()
-    print("-")
-    if (plt) {
-      print(scape$show())
-      Sys.sleep(1.5)
-    }
-    period <- period + 1
-  }
-}
-
-
-#   -----------------------------------------------------------------------
-testScape <- Sugarscape$new(c(50,50))
-#testScape$move()
-#testScape$show()
-runsim(testScape, 30)
+# Example -----------------------------------------------------------------
+testScape <- Sugarscape$new(
+  lout = c(114,114),
+  peaks = list(c(30,30),c(75,75),c(30,80)),
+  maxc = 4, 
+  suggr = 1, 
+  nagents = 550, 
+  agent_params = list(
+    values = list(
+      vision      = c(1,2,5),
+      sugarbolism = c(1,2,3,4),
+      lifespan    = c(Inf,Inf,Inf),
+      capacity    = Inf,
+      endowment   = c(0,5,10)
+    ),
+    probs  = list(
+      vision      = c(1/3,1/3,1/3),
+      sugarbolism = c(0.25,0.25,0.25,0.25),
+      lifespan    = c(1/3,1/3,1/3),
+      capacity    = 1,
+      endowment   = c(0.7,0.2,0.1)
+    )
+  )
+)
+gganimate(testScape$simulate(180, plt = F, animate = T))
